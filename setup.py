@@ -34,8 +34,6 @@ def get_extensions():
         sources += source_cuda
         define_macros += [("WITH_CUDA", None)]
         extra_compile_args["nvcc"] = [
-            "-isystem",
-            "/lustre/fswork/projects/rech/mvq/ubc18yy/kernel-headers-5.4/install/include",
             "-DCUDA_HAS_FP16=1",
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-D__CUDA_NO_HALF_CONVERSIONS__",
