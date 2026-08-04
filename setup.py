@@ -38,6 +38,7 @@ def get_extensions():
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-D__CUDA_NO_HALF_CONVERSIONS__",
             "-D__CUDA_NO_HALF2_OPERATORS__",
+            "-U__SIZEOF_INT128__"
         ]
 
         # It's better if pytorch can do this by default ..
