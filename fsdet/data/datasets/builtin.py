@@ -331,6 +331,14 @@ def register_hf_data():
     MetadataCatalog.get(f"{dataset_name}_val").set(thing_classes=classes, evaluator_type="coco")
     del coco_dict
 
+    coco_dict, images_dict_train = hf_to_coco_dict(dataset["train"], categories=categories)
+    coco_path = write_temp_coco(coco_dict)
+
+    register_coco_instances(f"{dataset_name}_train", {}, coco_path, image_root=".")
+    DatasetCatalog.register(f"{dataset_name}_train_images", lambda: images_dict_train)
+    MetadataCatalog.get(f"{dataset_name}_train").set(thing_classes=classes, evaluator_type="coco")
+    del coco_dict
+
     name = f"{dataset_name}_1shot"
     dataset["train"].sampling(shots=1, seed=int(seed))
     records_1shot = hf_to_detectron2(dataset["train"])
