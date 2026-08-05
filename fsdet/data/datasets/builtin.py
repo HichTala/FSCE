@@ -16,10 +16,12 @@ exist in "./datasets/".
 Users SHOULD NOT use this file to create new dataset / metadata for new dataset.
 To add new dataset, refer to the tutorial "docs/DATASETS.md".
 """
-
+import copy
+import json
 import os
+import tempfile
 
-from fsdet.data import MetadataCatalog
+from fsdet.data import MetadataCatalog, DatasetCatalog
 from .register_coco import register_coco_instances
 from .meta_coco import register_meta_coco
 from .lvis import register_lvis_instances
@@ -27,7 +29,8 @@ from .meta_lvis import register_meta_lvis
 from .pascal_voc import register_pascal_voc
 from .meta_pascal_voc import register_meta_pascal_voc
 from .builtin_meta import _get_builtin_metadata
-
+from ...structures import BoxMode
+from fsdetection import load_fs_dataset
 
 # ==== Predefined datasets and splits for COCO ==========
 
