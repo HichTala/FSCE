@@ -11,7 +11,6 @@ INPUT:
   MIN_SIZE_TEST: 512
 DATASETS:
   TRAIN: ('dota_train',)
-  VAL: ('dota_val',)
   TEST: ('dota_test',)
 SOLVER:
   STEPS: (30000, 40000)
