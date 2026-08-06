@@ -235,7 +235,15 @@ class DatasetMapperHuggingFace(DatasetMapper):
         dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
         # USER: Write your own image loading if it's not from a file
         sample = self.hf_dataset[dataset_dict["image_id"]]
-        image = np.array(sample["image"].convert(self.img_format))
+        image = sample["image"]
+
+        conversion_format = self.img_format
+        if self.img_format == "BGR":
+            conversion_format = "RGB"
+
+        image = image.convert(conversion_format)
+        image = np.asarray(image)
+
         utils.check_image_size(dataset_dict, image)
 
         if "annotations" not in dataset_dict:
