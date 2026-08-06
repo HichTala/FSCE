@@ -16,12 +16,9 @@ exist in "./datasets/".
 Users SHOULD NOT use this file to create new dataset / metadata for new dataset.
 To add new dataset, refer to the tutorial "docs/DATASETS.md".
 """
-import copy
-import json
 import os
-import tempfile
 
-from fsdet.data import MetadataCatalog, DatasetCatalog
+from fsdet.data import MetadataCatalog
 from .register_coco import register_coco_instances
 from .meta_coco import register_meta_coco
 from .lvis import register_lvis_instances
@@ -29,8 +26,6 @@ from .meta_lvis import register_meta_lvis
 from .pascal_voc import register_pascal_voc
 from .meta_pascal_voc import register_meta_pascal_voc
 from .builtin_meta import _get_builtin_metadata
-from ...structures import BoxMode
-from fsdetection import load_fs_dataset
 
 # ==== Predefined datasets and splits for COCO ==========
 
@@ -229,142 +224,8 @@ def register_all_pascal_voc(root="datasets"):
                                  keepclasses, sid)
         MetadataCatalog.get(name).evaluator_type = "pascal_voc"
 
-# ==== Datasets for Cross-Domain from Huggingface ===========
-def hf_to_detectron2(dataset, split="train"):
-    records = []
-
-    for idx, sample in enumerate(dataset):
-        width, height = sample["image"].size
-
-        record = {
-            "file_name": None,
-            "image_id": idx,
-            "height": height,
-            "width": width,
-            "annotations": [],
-        }
-
-        for bbox, cat_id in zip(
-                sample["objects"]["bbox"],
-                sample["objects"]["category"]
-        ):
-            record["annotations"].append({
-                "bbox": bbox,
-                "bbox_mode": BoxMode.XYWH_ABS,
-                "category_id": cat_id,
-            })
-
-        record["image"] = sample["image"]
-        records.append(record)
-
-    return records
-
-def hf_to_coco_dict(dataset, categories):
-    coco = {
-        "images": [],
-        "annotations": [],
-        "categories": categories,
-    }
-    images_dict = {}
-
-    ann_id = 1
-
-    for img_id, sample in enumerate(dataset):
-        width, height = sample["image"].size
-
-        coco["images"].append({
-            "id": img_id,
-            "width": width,
-            "height": height,
-            "file_name": f"{img_id}.jpg",
-        })
-        images_dict[img_id] = sample["image"]
-
-        for bbox, cat_id in zip(
-            sample["objects"]["bbox"],
-            sample["objects"]["category"]
-        ):
-            coco["annotations"].append({
-                "id": ann_id,
-                "image_id": img_id,
-                "category_id": cat_id,
-                "bbox": bbox,
-                "area": bbox[2] * bbox[3],
-                "iscrowd": 0,
-            })
-            ann_id += 1
-
-    return coco, images_dict
-
-def write_temp_coco(coco_dict):
-    tmp = tempfile.NamedTemporaryFile(
-        suffix=".json", mode='w', delete=False
-    )
-    json.dump(coco_dict, tmp)
-    tmp.close()
-    return tmp.name
-
-def register_hf_data():
-    seed = os.getenv("REPEAT_ID", 2026)
-    dataset_name = os.getenv("DATASET")
-
-    dataset = load_fs_dataset(f"/lustre/fsn1/projects/rech/mvq/ubc18yy/datasets/{dataset_name}")
-    og_dataset = copy.deepcopy(dataset["train"])
-    classes = dataset["train"].features["objects"]["category"].feature.names
-
-    id2label = dict(enumerate(classes))
-    categories = [{"id": i, "name": name} for i, name in id2label.items()]
-
-    coco_dict, images_dict_test = hf_to_coco_dict(dataset["test"], categories=categories)
-    coco_path = write_temp_coco(coco_dict)
-
-    register_coco_instances(f"{dataset_name}_test", {}, coco_path, image_root=".")
-    DatasetCatalog.register(f"{dataset_name}_test_images", lambda: images_dict_test)
-    MetadataCatalog.get(f"{dataset_name}_test").set(thing_classes=classes, evaluator_type="coco")
-    del coco_dict
-
-    coco_dict, images_dict_val = hf_to_coco_dict(dataset["validation"], categories=categories)
-    coco_path = write_temp_coco(coco_dict)
-
-    register_coco_instances(f"{dataset_name}_val", {}, coco_path, image_root=".")
-    DatasetCatalog.register(f"{dataset_name}_val_images", lambda: images_dict_val)
-    MetadataCatalog.get(f"{dataset_name}_val").set(thing_classes=classes, evaluator_type="coco")
-    del coco_dict
-
-    coco_dict, images_dict_train = hf_to_coco_dict(dataset["train"], categories=categories)
-    coco_path = write_temp_coco(coco_dict)
-
-    register_coco_instances(f"{dataset_name}_train", {}, coco_path, image_root=".")
-    DatasetCatalog.register(f"{dataset_name}_train_images", lambda: images_dict_train)
-    MetadataCatalog.get(f"{dataset_name}_train").set(thing_classes=classes, evaluator_type="coco")
-    del coco_dict
-
-    name = f"{dataset_name}_1shot"
-    dataset["train"].sampling(shots=1, seed=int(seed))
-    records_1shot = hf_to_detectron2(dataset["train"])
-    DatasetCatalog.register(name, lambda: records_1shot)
-    MetadataCatalog.get(name).set(thing_classes=classes)
-    dataset["train"] = copy.deepcopy(og_dataset)
-
-    name = f"{dataset_name}_5shot"
-    dataset["train"].sampling(shots=5, seed=int(seed))
-    records_5shot = hf_to_detectron2(dataset["train"])
-    DatasetCatalog.register(name, lambda: records_5shot)
-    MetadataCatalog.get(name).set(thing_classes=classes)
-    dataset["train"] = copy.deepcopy(og_dataset)
-
-    name = f"{dataset_name}_10shot"
-    dataset["train"].sampling(shots=10, seed=int(seed))
-    records_10shot = hf_to_detectron2(dataset["train"])
-    DatasetCatalog.register(name, lambda: records_10shot)
-    MetadataCatalog.get(name).set(thing_classes=classes)
-    dataset["train"] = copy.deepcopy(og_dataset)
-
-    del og_dataset
-
 
 # Register them all under "./datasets"
 register_all_coco()
 register_all_lvis()
 register_all_pascal_voc()
-register_hf_data()
