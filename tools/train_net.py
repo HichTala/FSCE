@@ -23,6 +23,7 @@ import fsdet.utils.comm as comm
 from fsdet.checkpoint import DetectionCheckpointer
 from fsdet.config import get_cfg, set_global_cfg
 from fsdet.data import MetadataCatalog, build_detection_train_loader, DatasetCatalog
+from fsdet.data.dataset_mapper import DatasetMapperHuggingFace
 from fsdet.data.datasets import register_coco_instances
 from fsdet.engine import (
     DefaultTrainer,
@@ -214,7 +215,8 @@ class Trainer(DefaultTrainer):
 
     @classmethod
     def build_train_loader(cls, cfg):
-        mapper = None
+        dataset = register_hf_data()
+        mapper = DatasetMapperHuggingFace(cfg, is_train=True, hf_dataset=dataset)
         # if cfg.INPUT.USE_ALBUMENTATIONS:
         #     mapper = AlbumentationMapper(cfg, is_train=True)
         return build_detection_train_loader(cfg, mapper=mapper)
@@ -249,7 +251,6 @@ def main(args):
     If you'd like to do anything fancier than the standard training logic,
     consider writing your own training loop or subclassing the trainer.
     """
-    dataset = register_hf_data()
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
     return trainer.train()
