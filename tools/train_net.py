@@ -20,6 +20,7 @@ import logging
 import os
 import tempfile
 from collections import OrderedDict
+import wandb
 
 import fsdet.utils.comm as comm
 from fsdet.checkpoint import DetectionCheckpointer
@@ -31,7 +32,7 @@ from fsdet.engine import (
     DefaultTrainer,
     default_argument_parser,
     default_setup,
-    launch,
+    launch, HookBase, hooks,
 )
 from fsdet.evaluation import (
     COCOEvaluator,
@@ -40,12 +41,36 @@ from fsdet.evaluation import (
     PascalVOCDetectionEvaluator,
     verify_results, DatasetEvaluator, inference_on_dataset, print_csv_format,
 )
+from fvcore.nn.precise_bn import get_bn_modules
 from fsdetection import load_fs_dataset
 
 from fsdet.structures import BoxMode
 
 
 # from fsdet.data.dataset_mapper import AlbumentationMapper
+
+class WandbHook(HookBase):
+    def __init__(self, log_period=20):
+        self.log_period = log_period
+
+    def after_step(self):
+        if self.trainer.iter % self.log_period == 0:
+            metrics = self.trainer.storage.latest()
+            log_dict = {
+                k: v[0] for k, v in metrics.items()
+                if isinstance(v, tuple)
+            }
+            log_dict["iter"] = self.trainer.iter
+            wandb.log(log_dict)
+
+    def after_train(self):
+        metrics = self.trainer.storage.latest()
+        log_dict = {
+            f"test_{k}": v[0] for k, v in metrics.items()
+            if isinstance(v, tuple)
+        }
+        log_dict["iter"] = self.trainer.iter
+        wandb.log(log_dict)
 
 # ==== Datasets for Cross-Domain from Huggingface ===========
 def hf_to_detectron2(dataset, split="train"):
@@ -186,6 +211,62 @@ class Trainer(DefaultTrainer):
     are working on a new research project. In that case you can use the cleaner
     "SimpleTrainer", or write your own training loop.
     """
+
+    def build_hooks(self):
+        """
+        Build a list of default hooks, including timing, evaluation,
+        checkpointing, lr scheduling, precise BN, writing events.
+
+        Returns:
+            list[HookBase]:
+        """
+        cfg = self.cfg.clone()
+        cfg.defrost()
+        cfg.DATALOADER.NUM_WORKERS = 0  # save some memory and time for PreciseBN
+
+        ret = [
+            hooks.IterationTimer(),
+            hooks.LRScheduler(self.optimizer, self.scheduler),
+            hooks.PreciseBN(
+                # Run at the same freq as (but before) evaluation.
+                cfg.TEST.EVAL_PERIOD,
+                self.model,
+                # Build a new data loader to not affect training
+                self.build_train_loader(cfg),
+                cfg.TEST.PRECISE_BN.NUM_ITER,
+            )
+            if cfg.TEST.PRECISE_BN.ENABLED and get_bn_modules(self.model)
+            else None,
+        ]
+
+        # Do PreciseBN before checkpointer, because it updates the model and need to
+        # be saved by checkpointer.
+        # This is not always the best: if checkpointing has a different frequency,
+        # some checkpoints may have more precise statistics than others.
+        if comm.is_main_process():
+            repeat_id = os.getenv("REPEAT_ID", 2026)
+            project = os.getenv("PROJECT", "FSCE")
+            wandb.init(
+                project=project,
+                name=f"{cfg.DATASETS.TRAIN[0]}_{cfg.SOLVER.MAX_ITER}_rep{repeat_id}",
+                group=f"{cfg.DATASETS.TRAIN[0]}_{cfg.SOLVER.MAX_ITER}",
+                config=cfg
+            )
+            ret.append(hooks.PeriodicCheckpointer(self.checkpointer, cfg.SOLVER.CHECKPOINT_PERIOD))
+            ret.append(WandbHook(log_period=20))
+
+        def test_and_save_results():
+            self._last_eval_results = self.test(self.cfg, self.model)
+            return self._last_eval_results
+
+        # Do evaluation after checkpointer, because then if it fails,
+        # we can use the saved checkpoint to debug.
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD, test_and_save_results))
+
+        if comm.is_main_process():
+            # run writers in the end, so that evaluation metrics are written
+            ret.append(hooks.PeriodicWriter(self.build_writers()))
+        return ret
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name, output_folder=None):
