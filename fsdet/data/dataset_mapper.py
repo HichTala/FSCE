@@ -8,7 +8,7 @@ import json
 import albumentations as A
 from fsdet.structures import BoxMode
 
-from . import detection_utils as utils
+from . import detection_utils as utils, DatasetCatalog
 from . import transforms as T
 
 """
@@ -227,15 +227,25 @@ class AlbumentationMapper:
             return A.from_dict(json.load(f))
 
 class DatasetMapperHuggingFace(DatasetMapper):
-    def __init__(self, cfg, is_train=True, hf_dataset=None):
+    def __init__(self, cfg, is_train=True, is_validation=False, hf_dataset=None):
         super().__init__(cfg, is_train)
+        self.is_train = is_train
+        self.is_validation = is_validation
+
         self.hf_dataset = hf_dataset
+        if is_validation:
+            self.image_dict = DatasetCatalog.get(cfg.DATASETS.VAL[0] + "_images")
+        else:
+            self.image_dict = DatasetCatalog.get(cfg.DATASETS.TEST[0] + "_images")
 
     def __call__(self, dataset_dict):
         dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
         # USER: Write your own image loading if it's not from a file
-        sample = self.hf_dataset[dataset_dict["image_id"]]
-        image = sample["image"]
+        if self.is_train:
+            sample = self.hf_dataset[dataset_dict["image_id"]]
+            image = sample["image"]
+        else:
+            image = self.image_dict[dataset_dict["image_id"]]
 
         conversion_format = self.img_format
         if self.img_format == "BGR":

@@ -16,13 +16,15 @@ You may want to write your own script with your datasets and other customization
 """
 import copy
 import json
+import logging
 import os
 import tempfile
+from collections import OrderedDict
 
 import fsdet.utils.comm as comm
 from fsdet.checkpoint import DetectionCheckpointer
 from fsdet.config import get_cfg, set_global_cfg
-from fsdet.data import MetadataCatalog, build_detection_train_loader, DatasetCatalog
+from fsdet.data import MetadataCatalog, build_detection_train_loader, DatasetCatalog, build_detection_test_loader
 from fsdet.data.dataset_mapper import DatasetMapperHuggingFace
 from fsdet.data.datasets import register_coco_instances
 from fsdet.engine import (
@@ -36,7 +38,7 @@ from fsdet.evaluation import (
     DatasetEvaluators,
     LVISEvaluator,
     PascalVOCDetectionEvaluator,
-    verify_results,
+    verify_results, DatasetEvaluator, inference_on_dataset, print_csv_format,
 )
 from fsdetection import load_fs_dataset
 
@@ -220,6 +222,83 @@ class Trainer(DefaultTrainer):
         # if cfg.INPUT.USE_ALBUMENTATIONS:
         #     mapper = AlbumentationMapper(cfg, is_train=True)
         return build_detection_train_loader(cfg, mapper=mapper)
+
+    @classmethod
+    def build_test_loader(cls, cfg, dataset_name, is_validation=True):
+        """
+        Returns:
+            iterable
+
+        It now calls :func:`fsdet.data.build_detection_test_loader`.
+        Overwrite it if you'd like a different data loader.
+        """
+        mapper = DatasetMapperHuggingFace(cfg, is_train=False, is_validation=is_validation)
+        return build_detection_test_loader(cfg, dataset_name, mapper)
+
+
+    @classmethod
+    def test(cls, cfg, model, evaluators=None, is_validation=True):
+        """
+        Args:
+            cfg (CfgNode):
+            model (nn.Module):
+            evaluators (list[DatasetEvaluator] or None): if None, will call
+                :meth:`build_evaluator`. Otherwise, must have the same length as
+                `cfg.DATASETS.TEST`.
+
+        Returns:
+            dict: a dict of result metrics
+        """
+        logger = logging.getLogger(__name__)
+        if isinstance(evaluators, DatasetEvaluator):
+            evaluators = [evaluators]
+        if evaluators is not None:
+            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(
+                len(cfg.DATASETS.TEST), len(evaluators)
+            )
+            if "VAL" in cfg.DATASETS:
+                assert len(cfg.DATASETS.VAL) == len(evaluators), "{} != {}".format(
+                    len(cfg.DATASETS.VAL), len(evaluators)
+                )
+            else:
+                is_validation = False
+
+        if is_validation:
+            dataset_names = cfg.DATASETS.VAL
+        else:
+            dataset_names = cfg.DATASETS.TEST
+
+        results = OrderedDict()
+        for idx, dataset_name in enumerate(dataset_names):
+            data_loader = cls.build_test_loader(cfg, dataset_name, is_validation)
+            # When evaluators are passed in as arguments,
+            # implicitly assume that evaluators can be created before data_loader.
+            if evaluators is not None:
+                evaluator = evaluators[idx]
+            else:
+                try:
+                    evaluator = cls.build_evaluator(cfg, dataset_name)
+                except NotImplementedError:
+                    logger.warn(
+                        "No evaluator found. Use `DefaultTrainer.test(evaluators=)`, "
+                        "or implement its `build_evaluator` method."
+                    )
+                    results[dataset_name] = {}
+                    continue
+            results_i = inference_on_dataset(model, data_loader, evaluator)
+            results[dataset_name] = results_i
+            if comm.is_main_process():
+                assert isinstance(
+                    results_i, dict
+                ), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                    results_i
+                )
+                logger.info("Evaluation results for {} in csv format:".format(dataset_name))
+                print_csv_format(results_i)
+
+        if len(results) == 1:
+            results = list(results.values())[0]
+        return results
 
 def setup(args):
     """
